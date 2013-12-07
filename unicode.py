@@ -11,7 +11,6 @@
 # For that we recommend you use a proper binding to libicu.
 
 import fileinput
-import re
 import os
 import sys
 
@@ -97,7 +96,7 @@ def load_unicode_data(f):
     }
 
 
-def escape_u32(c):
+def escape_u(c):
     if c <= 0xff:
         return "0x%2.2x" % c
     if c <= 0xffff:
@@ -113,10 +112,10 @@ def escape_char(c):
     return "'\\U%8.8x'" % c
 
 
-def ch_prefix(ix, indent=8):
+def ch_prefix(ix, indent=8, linebreak=4):
     if ix == 0:
         return " " * indent
-    if ix % 2 == 0:
+    if ix % linebreak == 0:
         return ",\n" + (" " * indent)
     else:
         return ", "
@@ -140,33 +139,58 @@ def emit_bsearch_range_table(f):
 def emit_property_enum_module(f, mod, tbl, enum, enum_name):
     #f.write("pub mod %s {\n" % mod)
     write_enum_list(f, enum, enum_name, indent=0)
-    tbl_name = "{}_table".format(mod)
-    f.write("static {}: &'static [(u32, {})] = &[\n"
-            .format(tbl_name, enum_name))
+
+    # bmp
+    bmp_tbl_name = "{}_bmp_table".format(mod)
+    f.write("static {}: &'static [(u16, {})] = &[\n"
+            .format(bmp_tbl_name, enum_name))
     ix = 0
     for cat, lo in tbl:
+        if lo > 0xFFFF:
+            break
         f.write(ch_prefix(ix, indent=4))
-        f.write("(%s, %s)" % (escape_u32(lo), cat))
+        f.write("(%s, %s)" % (escape_u(lo), cat))
+        ix += 1
+    f.write("\n];\n\n")
+
+    # other planes. TODO planewise?
+    others_tbl_name = "{}_others_table".format(mod)
+    f.write("static {}: &'static [(u32, {})] = &[\n"
+            .format(others_tbl_name, enum_name))
+    ix = 0
+    for cat, lo in tbl:
+        if lo <= 0xFFFF:
+            continue
+        f.write(ch_prefix(ix, indent=4))
+        f.write("(%s, %s)" % (escape_u(lo), cat))
         ix += 1
     f.write("\n];\n\n")
 
     f.write("pub fn {}(c: char) -> {} {{".format(mod, enum_name))
     f.write("""
     let c = c as u32;
-    let v = bsearch_range(%s, |&(lo, _), &(hi, _)| {
-        if lo <= c && c < hi { Equal }
-        else if hi <= c { Less }
-        else { Greater }
-    });
-    match v {
-        Some(idx) => {
-            let (_, v) = %s[idx];
-            v
-        },
-        None => fail!("???"),
-    }
+    if c <= 0xffff {
+        let v = bsearch_range(%s, |&(lo, _), &(hi, _)| {
+            let c = c as u16;
+            if lo <= c && c < hi { Equal }
+            else if hi <= c { Less }
+            else { Greater }
+        });
+        let idx = v.unwrap();
+        let (_, val) = %s[idx];
+        return val;
+    } else {
+        let v = bsearch_range(%s, |&(lo, _), &(hi, _)| {
+            if lo <= c && c < hi { Equal }
+            else if hi <= c { Less }
+            else { Greater }
+        });
+        let idx = v.unwrap();
+        let (_, val) = %s[idx];
+        return val;
+    };
 }
-""" % (tbl_name, tbl_name))
+""" % (bmp_tbl_name, bmp_tbl_name, others_tbl_name, others_tbl_name))
     #f.write("}\n")
 
 
