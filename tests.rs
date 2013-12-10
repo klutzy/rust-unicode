@@ -1,6 +1,6 @@
 extern mod extra;
 
-use unicode::general_category;
+use unicode::{general_category, combining_class};
 use extra::test::BenchHarness;
 
 mod unicode;
@@ -21,7 +21,6 @@ fn test_general_category() {
 
     for &(v1, v2) in values.iter() {
         let gen_cat = general_category(v1);
-        println!("v2: {:?} / gen_cat: {:?}", v2, gen_cat);
         assert_eq!(v2, gen_cat);
     }
 }
@@ -56,10 +55,24 @@ fn bench_general_category_nonbmp(bh: &mut BenchHarness) {
     });
 }
 
-//fn is_alphanumeric(c: char) -> bool {
-//
-//}
-//
-//#[bench]
-//fn bench_is_alphanumeric(bh: &BenchHarness) {
-//}
+#[test]
+fn test_combining_class() {
+    let values = [
+        ('\x00', 0),
+        ('\u0300', 230),
+        ('\u0314', 230),
+        ('\u0315', 232),
+        ('\u0316', 220),
+        ('\u0319', 220),
+        ('\ufe26', 230),
+        ('\ufe26', 230),
+        ('\U000101fd', 220),
+        ('\U00010a0d', 220),
+        ('\U0001d244', 230),
+    ];
+
+    for &(v1, v2) in values.iter() {
+        let comb = combining_class(v1);
+        assert_eq!(v2, comb);
+    }
+}

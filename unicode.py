@@ -30,7 +30,7 @@ def write_str_list(f, strs, name, nl=8, spaces=4):
     f.write("];\n\n")
 
 
-def write_enum_list(f, strs, name, nl=8, indent=4):
+def emit_enum(f, strs, name, nl=8, indent=4):
     f.write((" " * indent) + "#[deriving(Eq)]\n")
     f.write((" " * indent) + "pub enum " + name + " {\n")
     for i, s in enumerate(strs):
@@ -63,12 +63,23 @@ def fetch(f):
         exit(1)
 
 
+def discontinuous(a, b):
+    if a + 1 < b:
+        # unassigned area exists
+        return True
+    return a <= 0xffff and b > 0xffff
+
+
 def load_unicode_data(f):
     gencats = []
-
     prev_gencat = "Cn"
     prev_gencat_start = 0
     prev_gencat_end = 0
+
+    combines = []
+    prev_combine = 0
+    prev_combine_start = 0
+    prev_combine_end = 0
 
     for line in fileinput.input(f):
         fields = line.split(";")
@@ -81,8 +92,7 @@ def load_unicode_data(f):
 
         if prev_gencat != gencat:
             gencats.append((prev_gencat, prev_gencat_start))
-            if prev_gencat_end < code - 1:
-                # unassigned area exists
+            if discontinuous(prev_gencat_end, code):
                 gencats.append(("Cn", prev_gencat_end + 1))
             prev_gencat = gencat
             prev_gencat_start = code
@@ -90,9 +100,21 @@ def load_unicode_data(f):
         else:
             prev_gencat_end = code
 
+        if prev_combine != combine or discontinuous(prev_combine_end, code):
+            if int(prev_combine) != 0:
+                combines.append((prev_combine, prev_combine_start,
+                                prev_combine_end))
+            prev_combine = combine
+            prev_combine_start = code
+            prev_combine_end = code
+        else:
+            prev_combine_end = code
+
     gencats = gencats[1:]
+
     return {
         'gencats': gencats,
+        'combines': combines,
     }
 
 
@@ -136,14 +158,11 @@ def emit_bsearch_range_table(f):
 """)
 
 
-def emit_property_enum_module(f, mod, tbl, enum, enum_name):
-    #f.write("pub mod %s {\n" % mod)
-    write_enum_list(f, enum, enum_name, indent=0)
-
+def emit_single_table(f, tbl_prefix, tbl, type_name):
     # bmp
-    bmp_tbl_name = "{}_bmp_table".format(mod)
+    bmp_tbl_name = "{}_bmp_table".format(tbl_prefix)
     f.write("static {}: &'static [(u16, {})] = &[\n"
-            .format(bmp_tbl_name, enum_name))
+            .format(bmp_tbl_name, type_name))
     ix = 0
     for cat, lo in tbl:
         if lo > 0xFFFF:
@@ -154,9 +173,9 @@ def emit_property_enum_module(f, mod, tbl, enum, enum_name):
     f.write("\n];\n\n")
 
     # other planes. TODO planewise?
-    others_tbl_name = "{}_others_table".format(mod)
+    others_tbl_name = "{}_others_table".format(tbl_prefix)
     f.write("static {}: &'static [(u32, {})] = &[\n"
-            .format(others_tbl_name, enum_name))
+            .format(others_tbl_name, type_name))
     ix = 0
     for cat, lo in tbl:
         if lo <= 0xFFFF:
@@ -166,7 +185,7 @@ def emit_property_enum_module(f, mod, tbl, enum, enum_name):
         ix += 1
     f.write("\n];\n\n")
 
-    f.write("pub fn {}(c: char) -> {} {{".format(mod, enum_name))
+    f.write("pub fn {}(c: char) -> {} {{".format(tbl_prefix, type_name))
     f.write("""
     let c = c as u32;
     if c <= 0xffff {
@@ -191,22 +210,91 @@ def emit_property_enum_module(f, mod, tbl, enum, enum_name):
     };
 }
 """ % (bmp_tbl_name, bmp_tbl_name, others_tbl_name, others_tbl_name))
-    #f.write("}\n")
 
 
-r = "unicode.rs"
-for i in [r]:
-    if os.path.exists(i):
-        os.remove(i)
-rf = open(r, "w")
+def emit_range_table(f, tbl_prefix, tbl, type_name, default='0'):
+    # XXX mostly dup of emit_single_table
+    # assumes lo and hi are EITHER both in bmp OR both not in bmp.
+    # bmp
+    bmp_tbl_name = "{}_bmp_table".format(tbl_prefix)
+    f.write("static {}: &'static [(u16, u16, {})] = &[\n"
+            .format(bmp_tbl_name, type_name))
+    ix = 0
+    for cat, lo, hi in tbl:
+        if lo > 0xFFFF:
+            break
+        f.write(ch_prefix(ix, indent=4))
+        f.write("(%s, %s, %s)" % (escape_u(lo), escape_u(hi), cat))
+        ix += 1
+    f.write("\n];\n\n")
 
-f = "UnicodeData.txt"
-#fetch(f)
-data = load_unicode_data(f)
+    # other planes. TODO planewise?
+    others_tbl_name = "{}_others_table".format(tbl_prefix)
+    f.write("static {}: &'static [(u32, u32, {})] = &[\n"
+            .format(others_tbl_name, type_name))
+    ix = 0
+    for cat, lo, hi in tbl:
+        if lo <= 0xFFFF:
+            continue
+        f.write(ch_prefix(ix, indent=4, linebreak=2))
+        f.write("(%s, %s, %s)" % (escape_u(lo), escape_u(hi), cat))
+        ix += 1
+    f.write("\n];\n\n")
 
-# Preamble
-rf.write(
-    '''// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+    f.write("pub fn {}(c: char) -> {} {{".format(tbl_prefix, type_name))
+    f.write("""
+    let c = c as u32;
+    if c <= 0xffff {
+        let idx = %s.bsearch(|&(lo, hi, _)| {
+            let c = c as u16;
+            if lo <= c && c <= hi { Equal }
+            else if hi < c { Less }
+            else { Greater }
+        });
+        match idx {
+            Some(idx) => {
+                let (_, _, val) = %s[idx];
+                return val;
+            }
+            None => {
+                return %s;
+            }
+        }
+    } else {
+        let idx = %s.bsearch(|&(lo, hi, _)| {
+            if lo <= c && c <= hi { Equal }
+            else if hi < c { Less }
+            else { Greater }
+        });
+        match idx {
+            Some(idx) => {
+                let (_, _, val) = %s[idx];
+                return val;
+            }
+            None => {
+                return %s;
+            }
+        }
+    };
+}
+""" % (bmp_tbl_name, bmp_tbl_name, default,
+        others_tbl_name, others_tbl_name, default))
+
+
+def main():
+    r = "unicode.rs"
+    for i in [r]:
+        if os.path.exists(i):
+            os.remove(i)
+    rf = open(r, "w")
+
+    f = "UnicodeData.txt"
+    #fetch(f)
+    data = load_unicode_data(f)
+
+    # Preamble
+    rf.write('''
+// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -242,7 +330,20 @@ fn bsearch_range<T>(table: &[T], f: |&T, &T| -> Ordering) -> Option<uint> {
     return None;
 }
 
-''')
+'''.lstrip())
 
-emit_property_enum_module(rf, "general_category", data['gencats'], GEN_CATS,
-                          "GeneralCategory")
+    gen_cat_enum = GEN_CATS
+    gen_cat_enum_name = "GeneralCategory"
+    gen_cat_tbl_prefix = "general_category"
+    emit_enum(rf, gen_cat_enum, gen_cat_enum_name, indent=0)
+    emit_single_table(rf, gen_cat_tbl_prefix, data['gencats'],
+                      gen_cat_enum_name)
+
+    rf.write('\n')
+
+    combine_tbl_prefix = "combining_class"
+    emit_range_table(rf, combine_tbl_prefix, data['combines'], "u8")
+
+
+if __name__ == '__main__':
+    main()
