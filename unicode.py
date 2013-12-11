@@ -62,8 +62,15 @@ def fetch(f):
         sys.stderr.write("cannot load %s" % f)
         exit(1)
 
+    return fileinput.input(f)
 
-def discontinuous(a, b):
+
+def discontinuous(a, b, a_name, b_name):
+    if not a_name:
+        return True
+    if a_name.endswith('First>') and b_name.endswith('Last>'):
+        # start ~ end. Here not (a <= 0xffff and b > 0xffff) is assumed
+        return False
     if a + 1 < b:
         # unassigned area exists
         return True
@@ -72,16 +79,18 @@ def discontinuous(a, b):
 
 def load_unicode_data(f):
     gencats = []
-    prev_gencat = "Cn"
-    prev_gencat_start = 0
-    prev_gencat_end = 0
+    prev_gencat = None
+    prev_gencat_start = -1
 
     combines = []
-    prev_combine = 0
-    prev_combine_start = 0
-    prev_combine_end = 0
+    prev_combine = -1
+    prev_combine_start = -1
+    prev_combine_end = -1
+    prev_name = None
 
-    for line in fileinput.input(f):
+    prev_code = -1
+
+    for line in f:
         fields = line.split(";")
         if len(fields) != 15:
             continue
@@ -90,27 +99,37 @@ def load_unicode_data(f):
          old, iso, upcase, lowcase, titlecase] = fields
         code = int(code, 16)
 
-        if prev_gencat != gencat:
+        is_disc = discontinuous(prev_code, code, prev_name, name)
+
+        cn_cat = None
+        if is_disc:
+            cn_cat = ("Cn", prev_code + 1)
+
+        if prev_gencat != gencat or is_disc:
             gencats.append((prev_gencat, prev_gencat_start))
-            if discontinuous(prev_gencat_end, code):
-                gencats.append(("Cn", prev_gencat_end + 1))
             prev_gencat = gencat
             prev_gencat_start = code
-            prev_gencat_end = code
-        else:
-            prev_gencat_end = code
 
-        if prev_combine != combine or discontinuous(prev_combine_end, code):
-            if int(prev_combine) != 0:
-                combines.append((prev_combine, prev_combine_start,
-                                prev_combine_end))
+        if cn_cat:
+            gencats.append(cn_cat)
+
+        if prev_combine != combine or \
+                discontinuous(prev_combine_end, code, prev_name, name):
+
+            combines.append((prev_combine, prev_combine_start,
+                            prev_combine_end))
             prev_combine = combine
             prev_combine_start = code
-            prev_combine_end = code
-        else:
-            prev_combine_end = code
+
+        prev_combine_end = code
+        prev_name = name
+        prev_code = code
+
+    gencats.append((prev_gencat, prev_gencat_start))
+    gencats.append(("Cn", prev_code + 1))
 
     gencats = gencats[1:]
+    combines = combines[1:]
 
     return {
         'gencats': gencats,
@@ -158,127 +177,115 @@ def emit_bsearch_range_table(f):
 """)
 
 
-def emit_single_table(f, tbl_prefix, tbl, type_name):
-    # bmp
-    bmp_tbl_name = "{}_bmp_table".format(tbl_prefix)
-    f.write("static {}: &'static [(u16, {})] = &[\n"
-            .format(bmp_tbl_name, type_name))
+def emit_table(f, tbl_name, elem_type, is_range, tbl, lb=4):
+    f.write("static {}: &'static [{}] = &[\n"
+            .format(tbl_name, elem_type))
     ix = 0
-    for cat, lo in tbl:
-        if lo > 0xFFFF:
-            break
-        f.write(ch_prefix(ix, indent=4))
-        f.write("(%s, %s)" % (escape_u(lo), cat))
+    for vals in tbl:
+        lo = None
+        hi = None
+        elems = None
+        if is_range:
+            lo = escape_u(vals[-2])
+            hi = escape_u(vals[-1])
+            elems = [lo, hi] + list(vals[:-2])
+        else:
+            lo = escape_u(vals[-1])
+            elems = [lo, ] + list(vals[:-1])
+
+        f.write(ch_prefix(ix, indent=4, linebreak=lb))
+        f.write("(" + ", ".join(str(i) for i in elems) + ")")
         ix += 1
     f.write("\n];\n\n")
 
+
+def emit_single_table(f, tbl_prefix, tbl, type_name):
+    nidx = 0
+    for i, x in enumerate(tbl):
+        nidx = i
+        if x[-1] > 0xFFFF:
+            break
+
+    # bmp
+    bmp_tbl_name = "{}_bmp_table".format(tbl_prefix)
+    elem_type = "(u16, {})".format(type_name)
+    emit_table(f, bmp_tbl_name, elem_type, False, tbl[:nidx])
+
     # other planes. TODO planewise?
     others_tbl_name = "{}_others_table".format(tbl_prefix)
-    f.write("static {}: &'static [(u32, {})] = &[\n"
-            .format(others_tbl_name, type_name))
-    ix = 0
-    for cat, lo in tbl:
-        if lo <= 0xFFFF:
-            continue
-        f.write(ch_prefix(ix, indent=4))
-        f.write("(%s, %s)" % (escape_u(lo), cat))
-        ix += 1
-    f.write("\n];\n\n")
+    elem_type = "(u32, {})".format(type_name)
+    emit_table(f, others_tbl_name, elem_type, False, tbl[nidx:])
+
+    bsearch = """
+        let idx = bsearch_range(%s, |&(lo, _), &(hi, _)| {
+            if lo <= c && c < hi { Equal }
+            else if hi <= c { Less }
+            else { Greater }
+        });
+        let (_, val) = %s[idx];
+        return val;"""
 
     f.write("pub fn {}(c: char) -> {} {{".format(tbl_prefix, type_name))
     f.write("""
     let c = c as u32;
     if c <= 0xffff {
-        let v = bsearch_range(%s, |&(lo, _), &(hi, _)| {
-            let c = c as u16;
-            if lo <= c && c < hi { Equal }
-            else if hi <= c { Less }
-            else { Greater }
-        });
-        let idx = v.unwrap();
-        let (_, val) = %s[idx];
-        return val;
+        let c = c as u16;
+%s
     } else {
-        let v = bsearch_range(%s, |&(lo, _), &(hi, _)| {
-            if lo <= c && c < hi { Equal }
-            else if hi <= c { Less }
-            else { Greater }
-        });
-        let idx = v.unwrap();
-        let (_, val) = %s[idx];
-        return val;
+%s
     };
 }
-""" % (bmp_tbl_name, bmp_tbl_name, others_tbl_name, others_tbl_name))
+
+""" % (bsearch % (bmp_tbl_name, bmp_tbl_name),
+        bsearch % (others_tbl_name, others_tbl_name)))
 
 
 def emit_range_table(f, tbl_prefix, tbl, type_name, default='0'):
-    # XXX mostly dup of emit_single_table
-    # assumes lo and hi are EITHER both in bmp OR both not in bmp.
-    # bmp
-    bmp_tbl_name = "{}_bmp_table".format(tbl_prefix)
-    f.write("static {}: &'static [(u16, u16, {})] = &[\n"
-            .format(bmp_tbl_name, type_name))
-    ix = 0
-    for cat, lo, hi in tbl:
-        if lo > 0xFFFF:
+    nidx = 0
+    for i, x in enumerate(tbl):
+        nidx = i
+        if x[-1] > 0xFFFF:
             break
-        f.write(ch_prefix(ix, indent=4))
-        f.write("(%s, %s, %s)" % (escape_u(lo), escape_u(hi), cat))
-        ix += 1
-    f.write("\n];\n\n")
 
-    # other planes. TODO planewise?
+    # bmp
+    bmp_type = "(u16, u16, {})".format(type_name)
+    bmp_tbl_name = "{}_bmp_table".format(tbl_prefix)
+    emit_table(f, bmp_tbl_name, bmp_type, True, tbl[:nidx])
+
+    # other planes. TODO planewise? bitmap?
+    others_type = "(u32, u32, {})".format(type_name)
     others_tbl_name = "{}_others_table".format(tbl_prefix)
-    f.write("static {}: &'static [(u32, u32, {})] = &[\n"
-            .format(others_tbl_name, type_name))
-    ix = 0
-    for cat, lo, hi in tbl:
-        if lo <= 0xFFFF:
-            continue
-        f.write(ch_prefix(ix, indent=4, linebreak=2))
-        f.write("(%s, %s, %s)" % (escape_u(lo), escape_u(hi), cat))
-        ix += 1
-    f.write("\n];\n\n")
+    emit_table(f, others_tbl_name, others_type, True, tbl[nidx:], lb=2)
 
     f.write("pub fn {}(c: char) -> {} {{".format(tbl_prefix, type_name))
+    bsearch = """
+        let idx = %s.bsearch(|&(lo, hi, _)| {
+            if lo <= c && c <= hi { Equal }
+            else if hi < c { Less }
+            else { Greater }
+        });
+        match idx {
+            Some(idx) => {
+                let (_, _, val) = %s[idx];
+                return val;
+            }
+            None => {
+                return %s;
+            }
+        }"""
+
     f.write("""
     let c = c as u32;
     if c <= 0xffff {
-        let idx = %s.bsearch(|&(lo, hi, _)| {
-            let c = c as u16;
-            if lo <= c && c <= hi { Equal }
-            else if hi < c { Less }
-            else { Greater }
-        });
-        match idx {
-            Some(idx) => {
-                let (_, _, val) = %s[idx];
-                return val;
-            }
-            None => {
-                return %s;
-            }
-        }
+        let c = c as u16;
+%s
     } else {
-        let idx = %s.bsearch(|&(lo, hi, _)| {
-            if lo <= c && c <= hi { Equal }
-            else if hi < c { Less }
-            else { Greater }
-        });
-        match idx {
-            Some(idx) => {
-                let (_, _, val) = %s[idx];
-                return val;
-            }
-            None => {
-                return %s;
-            }
-        }
+%s
     };
 }
-""" % (bmp_tbl_name, bmp_tbl_name, default,
-        others_tbl_name, others_tbl_name, default))
+
+""" % (bsearch % (bmp_tbl_name, bmp_tbl_name, default),
+        bsearch % (others_tbl_name, others_tbl_name, default)))
 
 
 def main():
@@ -288,9 +295,8 @@ def main():
             os.remove(i)
     rf = open(r, "w")
 
-    f = "UnicodeData.txt"
-    #fetch(f)
-    data = load_unicode_data(f)
+    data = fetch("UnicodeData.txt")
+    data = load_unicode_data(data)
 
     # Preamble
     rf.write('''
@@ -310,15 +316,16 @@ def main():
 #[allow(non_uppercase_statics)];
 use std::cmp::{Equal, Less, Greater};
 
-fn bsearch_range<T>(table: &[T], f: |&T, &T| -> Ordering) -> Option<uint> {
+fn bsearch_range<T>(table: &[T], f: |&T, &T| -> Ordering) -> uint {
     let mut base: uint = 0;
-    let mut lim: uint = table.len() - 1;
+    let len = table.len();
+    let mut lim: uint = len - 1;
 
     while lim != 0 {
         let ix = base + (lim >> 1);
         let v = f(&table[ix], &table[ix + 1]);
         match v {
-            Equal => return Some(ix),
+            Equal => return ix,
             Less => {
                 base = ix + 1;
                 lim -= 1;
@@ -327,22 +334,20 @@ fn bsearch_range<T>(table: &[T], f: |&T, &T| -> Ordering) -> Option<uint> {
         }
         lim >>= 1;
     }
-    return None;
+    return len - 1;
 }
 
 '''.lstrip())
 
     gen_cat_enum = GEN_CATS
     gen_cat_enum_name = "GeneralCategory"
-    gen_cat_tbl_prefix = "general_category"
     emit_enum(rf, gen_cat_enum, gen_cat_enum_name, indent=0)
-    emit_single_table(rf, gen_cat_tbl_prefix, data['gencats'],
+    emit_single_table(rf, "general_category", data['gencats'],
                       gen_cat_enum_name)
 
     rf.write('\n')
 
-    combine_tbl_prefix = "combining_class"
-    emit_range_table(rf, combine_tbl_prefix, data['combines'], "u8")
+    emit_range_table(rf, "combining_class", data['combines'], "u8")
 
 
 if __name__ == '__main__':

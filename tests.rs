@@ -6,7 +6,7 @@ use extra::test::BenchHarness;
 mod unicode;
 
 #[test]
-fn test_general_category() {
+fn test_general_category_bmp() {
     let values = [
         ('\x00', unicode::Cc),
         ('\x1F', unicode::Cc),
@@ -14,9 +14,31 @@ fn test_general_category() {
         ('\x21', unicode::Po),
         ('\x23', unicode::Po),
         ('\x24', unicode::Sc),
+        ('\uac00', unicode::Lo), // <Hangul Syllable, First>
+        ('\ud7a3', unicode::Lo), // <Hangul Syllable, Last>
+        ('\ud7a4', unicode::Cn),
+    ];
+
+    for &(v1, v2) in values.iter() {
+        let gen_cat = general_category(v1);
+        assert_eq!(v2, gen_cat);
+    }
+}
+
+#[test]
+fn test_general_category_others() {
+    let values = [
         ('\U0002FA1D', unicode::Lo),
         ('\U000E0000', unicode::Cn),
         ('\U000E0001', unicode::Cf),
+        ('\U000E01EF', unicode::Mn),
+        ('\U000E01F0', unicode::Cn),
+        ('\U000F0000', unicode::Co), // private use area
+        ('\U000FFFFD', unicode::Co), // private use area
+        ('\U000FFFFE', unicode::Cn),
+        ('\U00100000', unicode::Co),
+        ('\U0010FFFD', unicode::Co),
+        ('\U0010FFFE', unicode::Cn),
     ];
 
     for &(v1, v2) in values.iter() {
