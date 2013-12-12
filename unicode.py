@@ -13,6 +13,7 @@
 import fileinput
 import os
 import sys
+import re
 
 
 def write_str_list(f, strs, name, nl=8, spaces=4):
@@ -137,6 +138,38 @@ def load_unicode_data(f):
     }
 
 
+def load_properties(f, interestingprops):
+    props = {}
+    re1 = re.compile("^([0-9A-F]+) +; (\w+)")
+    re2 = re.compile("^([0-9A-F]+)\.\.([0-9A-F]+) +; (\w+)")
+
+    for line in f:
+        prop = None
+        d_lo = 0
+        d_hi = 0
+        m = re1.match(line)
+        if m:
+            d_lo = m.group(1)
+            d_hi = m.group(1)
+            prop = m.group(2)
+        else:
+            m = re2.match(line)
+            if m:
+                d_lo = m.group(1)
+                d_hi = m.group(2)
+                prop = m.group(3)
+            else:
+                continue
+        if prop not in interestingprops:
+            continue
+        d_lo = int(d_lo, 16)
+        d_hi = int(d_hi, 16)
+        if prop not in props:
+            props[prop] = []
+        props[prop].append((d_lo, d_hi))
+    return props
+
+
 def escape_u(c):
     if c <= 0xff:
         return "0x%2.2x" % c
@@ -240,7 +273,7 @@ def emit_single_table(f, tbl_prefix, tbl, type_name):
         bsearch % (others_tbl_name, others_tbl_name)))
 
 
-def emit_range_table(f, tbl_prefix, tbl, type_name, default='0'):
+def emit_range_table(f, tbl_prefix, tbl, type_name=None, default='0'):
     nidx = 0
     for i, x in enumerate(tbl):
         nidx = i
@@ -249,43 +282,64 @@ def emit_range_table(f, tbl_prefix, tbl, type_name, default='0'):
 
     # bmp
     bmp_type = "(u16, u16, {})".format(type_name)
+    if not type_name:
+        bmp_type = "(u16, u16)"
     bmp_tbl_name = "{}_bmp_table".format(tbl_prefix)
     emit_table(f, bmp_tbl_name, bmp_type, True, tbl[:nidx])
 
     # other planes. TODO planewise? bitmap?
     others_type = "(u32, u32, {})".format(type_name)
+    if not type_name:
+        others_type = "(u32, u32)"
     others_tbl_name = "{}_others_table".format(tbl_prefix)
     emit_table(f, others_tbl_name, others_type, True, tbl[nidx:], lb=2)
 
-    f.write("pub fn {}(c: char) -> {} {{".format(tbl_prefix, type_name))
     bsearch = """
-        let idx = %s.bsearch(|&(lo, hi, _)| {
+        let idx = %(tbl_name)s.bsearch(|&%(elem_type)s| {
             if lo <= c && c <= hi { Equal }
             else if hi < c { Less }
             else { Greater }
-        });
+        });"""
+
+    elem_type = "(lo, hi, _)"
+    if not type_name:
+        elem_type = "(lo, hi)"
+
+    if type_name:
+        f.write("pub fn {}(c: char) -> {} {{".format(tbl_prefix, type_name))
+        bsearch += """
         match idx {
             Some(idx) => {
-                let (_, _, val) = %s[idx];
+                let (_, _, val) = %(tbl_name)s[idx];
                 return val;
             }
             None => {
-                return %s;
+                return %(def_val)s;
             }
         }"""
+    else:
+        f.write("pub fn {}(c: char) -> bool {{".format(tbl_prefix))
+        bsearch += """
+        return idx.is_some();"""
+
+    bsearch_blobs = []
+    for tbl_name in (bmp_tbl_name, others_tbl_name):
+        bsearch_blobs.append(bsearch % {
+            'tbl_name': tbl_name,
+            'def_val': default,
+            'elem_type': elem_type
+        })
 
     f.write("""
     let c = c as u32;
     if c <= 0xffff {
         let c = c as u16;
 %s
-    } else {
-%s
+    } else {%s
     };
 }
 
-""" % (bsearch % (bmp_tbl_name, bmp_tbl_name, default),
-        bsearch % (others_tbl_name, others_tbl_name, default)))
+""" % (bsearch_blobs[0], bsearch_blobs[1]))
 
 
 def main():
@@ -348,6 +402,15 @@ fn bsearch_range<T>(table: &[T], f: |&T, &T| -> Ordering) -> uint {
     rf.write('\n')
 
     emit_range_table(rf, "combining_class", data['combines'], "u8")
+
+    derived = fetch("DerivedCoreProperties.txt")
+    derived = load_properties(derived, [
+        # "XID_Start", "XID_Continue",
+        "Alphabetic", "Lowercase", "Uppercase"
+    ])
+
+    for prop in derived:
+        emit_range_table(rf, prop.lower(), derived[prop])
 
 
 if __name__ == '__main__':
