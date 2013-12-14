@@ -54,16 +54,24 @@ GEN_CATS = [
 ]
 
 
-def fetch(f):
+def fetch(f, url):
     if not os.path.exists(f):
-        os.system("curl -O http://www.unicode.org/Public/UNIDATA/%s"
-                  % f)
+        os.system("curl -O %s"
+                  % url)
 
     if not os.path.exists(f):
         sys.stderr.write("cannot load %s" % f)
         exit(1)
 
     return fileinput.input(f)
+
+
+def fetch_unicode(f):
+    return fetch(f, "http://www.unicode.org/Public/UNIDATA/" + f)
+
+
+def fetch_rfc(f):
+    return fetch(f, "http://tools.ietf.org/rfc/" + f)
 
 
 def discontinuous(a, b, a_name, b_name):
@@ -168,6 +176,76 @@ def load_properties(f, interestingprops):
             props[prop] = []
         props[prop].append((d_lo, d_hi))
     return props
+
+
+def load_stringprep(f):
+    tbls = [
+        # ranges
+        'A.1',  # Unassigned code points in Unicode 3.2
+
+        # mappings
+        'B.1',  # Commonly mapped to nothing
+        'B.2',  # Mapping for case-folding used with NFKC
+        'B.3',  # Mapping for case-folding used with no normalization
+
+        # ranges
+        'C.1.1',  # ASCII space characters
+        'C.1.2',  # Non-ASCII space characters
+        'C.2.1',  # ASCII control characters
+        'C.2.2',  # Non-ASCII control characters
+
+        # ranges
+        'C.3',  # Private use
+        'C.4',  # Non-character code points
+        'C.5',  # Surrogate codes
+        'C.6',  # Inappropriate for plain text
+        'C.7',  # Inappropriate for canonical representation
+        'C.8',  # Change display properties or are deprecated
+        'C.9',  # Tagging characters
+
+        # ranges
+        'D.1',  # Characters with bidirectional property "R" or "AL"
+        'D.2',  # Characters with bidirectional property "L"
+    ]
+
+    result = {}
+    for key in tbls:
+        result[key] = []
+
+    cur_tbl = None
+
+    for line in f:
+        if not line.startswith(" " * 3):
+            continue
+        line = line.strip()
+        if line.startswith("-----") and line.endswith("-----"):
+            _, ind, _tab, section, _ = line.split()
+            assert _tab == "Table"
+            if ind == "Start":
+                assert cur_tbl is None
+                cur_tbl = section
+            else:
+                assert ind == "End"
+                assert cur_tbl == section
+                cur_tbl = None
+        elif cur_tbl:
+            vals = line.split(';')
+            if cur_tbl[0] == 'B':
+                # mappings
+                map_from, map_to, _ = vals
+                map_from = int(map_from, 16)
+                map_to = [int(i, 16) for i in map_to.split()]
+                result[cur_tbl].append((map_from, map_to))
+            else:
+                r = vals[0].split('-')
+                assert len(r) in (1, 2)
+                start = int(r[0], 16)
+                end = start
+                if len(r) == 2:
+                    end = int(r[1], 16)
+                result[cur_tbl].append((start, end))
+
+    return result
 
 
 def escape_u(c):
@@ -349,7 +427,7 @@ def main():
             os.remove(i)
     rf = open(r, "w")
 
-    data = fetch("UnicodeData.txt")
+    data = fetch_unicode("UnicodeData.txt")
     data = load_unicode_data(data)
 
     # Preamble
@@ -403,7 +481,7 @@ fn bsearch_range<T>(table: &[T], f: |&T, &T| -> Ordering) -> uint {
 
     emit_range_table(rf, "combining_class", data['combines'], "u8")
 
-    derived = fetch("DerivedCoreProperties.txt")
+    derived = fetch_unicode("DerivedCoreProperties.txt")
     derived = load_properties(derived, [
         # "XID_Start", "XID_Continue",
         "Alphabetic", "Lowercase", "Uppercase"
@@ -411,6 +489,12 @@ fn bsearch_range<T>(table: &[T], f: |&T, &T| -> Ordering) -> uint {
 
     for prop in derived:
         emit_range_table(rf, prop.lower(), derived[prop])
+
+    stringprep = fetch_rfc("rfc3454.txt")
+    stringprep = load_stringprep(stringprep)
+
+    for k in sorted(stringprep.keys()):
+        print("{}: {} entries".format(k, len(stringprep[k])))
 
 
 if __name__ == '__main__':
