@@ -55,9 +55,9 @@ GEN_CATS = [
 
 
 def fetch(f, url):
+    print f, url
     if not os.path.exists(f):
-        os.system("curl -O %s"
-                  % url)
+        os.system("curl -o '{}' '{}'".format(f, url))
 
     if not os.path.exists(f):
         sys.stderr.write("cannot load %s" % f)
@@ -66,8 +66,21 @@ def fetch(f, url):
     return fileinput.input(f)
 
 
-def fetch_unicode(f):
-    return fetch(f, "http://www.unicode.org/Public/UNIDATA/" + f)
+def fetch_unicode(f, version=None):
+    url = "http://www.unicode.org/Public/UNIDATA/{}.txt".format(f)  # latest
+    if version:
+        if version == "3.2.0":  # < 4.1.0
+            url = "http://www.unicode.org/Public/3.2-Update/{}-{}.txt"
+            url = url.format(f, version)
+            f = "{}-{}.txt".format(f, version)
+        else:
+            url = "http://www.unicode.org/Public/{}/ucd/{}.txt"
+            url = url.format(version, f)
+        f = "{}-{}.txt".format(f, version)
+    else:
+        f = f + ".txt"
+
+    return fetch(f, url)
 
 
 def fetch_rfc(f):
@@ -444,7 +457,9 @@ def main():
             os.remove(i)
     rf = open(r, "w")
 
-    data = fetch_unicode("UnicodeData.txt")
+    unicode_version = "6.3.0"
+
+    data = fetch_unicode("UnicodeData", unicode_version)
     data = load_unicode_data(data)
 
     # Preamble
@@ -498,7 +513,7 @@ fn bsearch_range<T>(table: &[T], f: |&T, &T| -> Ordering) -> uint {
 
     emit_range_table(rf, "combining_class", data['combines'], "u8")
 
-    derived = fetch_unicode("DerivedCoreProperties.txt")
+    derived = fetch_unicode("DerivedCoreProperties", unicode_version)
     derived = load_properties(derived, [
         # "XID_Start", "XID_Continue",
         "Alphabetic", "Lowercase", "Uppercase"
