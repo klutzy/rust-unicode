@@ -97,6 +97,9 @@ def load_unicode_data(f):
     prev_combine_end = -1
     prev_name = None
 
+    canon_decomp = []
+    compat_decomp = []
+
     prev_code = -1
 
     for line in f:
@@ -130,6 +133,18 @@ def load_unicode_data(f):
             prev_combine = combine
             prev_combine_start = code
 
+        if decomp:
+            if decomp.startswith('<'):
+                seq = []
+                for i in decomp.split()[1:]:
+                    seq.append(int(i, 16))
+                compat_decomp.append((code, seq))
+            else:
+                seq = []
+                for i in decomp.split():
+                    seq.append(int(i, 16))
+                canon_decomp.append((code, seq))
+
         prev_combine_end = code
         prev_name = name
         prev_code = code
@@ -143,6 +158,8 @@ def load_unicode_data(f):
     return {
         'gencats': gencats,
         'combines': combines,
+        'canon_decomp': canon_decomp,
+        'compat_decomp': compat_decomp,
     }
 
 
