@@ -303,21 +303,6 @@ def ch_prefix(ix, indent=8, linebreak=4):
         return ", "
 
 
-def emit_bsearch_range_table(f):
-    f.write("""
-    fn bsearch_range_table(c: char, r: &'static [(char,char)]) -> bool {
-        use cmp::{Equal, Less, Greater};
-        use vec::ImmutableVector;
-        use option::None;
-        r.bsearch(|&(lo,hi)| {
-            if lo <= c && c <= hi { Equal }
-            else if hi < c { Less }
-            else { Greater }
-        }) != None
-    }\n\n
-""")
-
-
 def emit_table(f, tbl_name, elem_type, is_range, tbl, lb=4):
     f.write("static {}: &'static [{}] = &[\n"
             .format(tbl_name, elem_type))
