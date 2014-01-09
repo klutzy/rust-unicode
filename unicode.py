@@ -435,6 +435,72 @@ def emit_range_table(f, tbl_prefix, tbl, type_name=None, default='0'):
 """ % (bsearch_blobs[0], bsearch_blobs[1]))
 
 
+def emit_list_table(f, tbl_prefix, tbl):
+    nidx = 0
+    for i, x in enumerate(tbl):
+        nidx = i
+        if x[0] > 0xFFFF:
+            break
+
+    def e(f, tbl_name, elem_type, tbl):
+        lb = 4
+        f.write("static {}: &'static [{}] = &[\n"
+                .format(tbl_name, elem_type))
+        ix = 0
+        for vals in tbl:
+            a = escape_u(vals[0])
+            bs = [escape_u(i) for i in vals[1]]
+
+            f.write(ch_prefix(ix, indent=4, linebreak=lb))
+            f.write("({}, &[{}])".format(a, ", ".join(bs)))
+            ix += 1
+        f.write("\n];\n\n")
+
+    def all_bmp(vals):
+        return all(all(v <= 0xFFFF for v in val[1]) for val in vals)
+
+    # bmp
+    bmp_type = "(u16, &'static [u32])"
+    bmp_tbl_name = "{}_bmp_table".format(tbl_prefix)
+    e(f, bmp_tbl_name, bmp_type, tbl[:nidx])
+
+    # others
+    others_type = "(u32, &'static [u32])"
+    others_tbl_name = "{}_others_table".format(tbl_prefix)
+    e(f, others_tbl_name, others_type, tbl[nidx:])
+
+    bsearch = """
+        let idx = %(tbl_name)s.bsearch(|&(lo, _)| {
+            if lo == c { Equal }
+            else if lo < c { Less }
+            else { Greater }
+        });
+        match idx {
+            Some(idx) => {
+                let (_, table) = %(tbl_name)s[idx];
+                return Some(table);
+            }
+            None => {
+                return None;
+            }
+        }"""
+
+    ret_type = "Option<&'static [u32]>"
+    f.write("pub fn {}(c: char) -> {} {{".format(tbl_prefix, ret_type))
+    f.write("""
+    let c = c as u32;
+    if c <= 0xffff {
+        let c = c as u16;
+%s
+    } else {
+%s
+    };
+}
+
+""" % (bsearch % {'tbl_name': bmp_tbl_name},
+        bsearch % {'tbl_name': others_tbl_name}))
+
+
 def main():
     r = "unicode.rs"
     for i in [r]:
@@ -496,7 +562,8 @@ fn bsearch_range<T>(table: &[T], f: |&T, &T| -> Ordering) -> uint {
 
     rf.write('\n')
 
-    emit_range_table(rf, "combining_class", data['combines'], "u8")
+    emit_range_table(rf, "combining_class", data["combines"], "u8")
+    emit_list_table(rf, "compat_decomp", data["compat_decomp"])
 
     derived = fetch_unicode("DerivedCoreProperties", unicode_version)
     derived = load_properties(derived, [

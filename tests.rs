@@ -1,6 +1,7 @@
 extern mod extra;
 
 use unicode::{general_category, combining_class, uppercase, lowercase, alphabetic};
+use unicode::compat_decomp;
 use extra::test::BenchHarness;
 
 mod unicode;
@@ -197,5 +198,89 @@ fn test_alphabetic() {
 
     for alphabet in alphabets.iter() {
         assert!(alphabetic(*alphabet));
+    }
+}
+
+fn assert_array_eq(a: &[char], b: Option<&[u32]>) {
+    let b = b.expect("b should be Some");
+    assert_eq!(a.len(), b.len());
+    for i in range(0, a.len()) {
+        assert_eq!(a[i] as u32, b[i]);
+    }
+}
+
+#[test]
+fn test_compat_decomp_bmp() {
+    let answers = [
+        // borrowed from std::unicode
+        ('\xA0', &['\x20']),
+        ('\xa8', &['\x20', '\u0308']),
+        ('\xaa', &['\x61']),
+        ('\xaf', &['\x20', '\u0304']),
+        ('\xb2', &['\x32']),
+        ('\xb3', &['\x33']),
+        ('\xb4', &['\x20', '\u0301']),
+        ('\xb5', &['\u03bc']),
+        ('\xb8', &['\x20', '\u0327']),
+        ('\xb9', &['\x31']),
+        ('\xba', &['\x6f']),
+
+        ('\uffe2', &['\xac']),
+        ('\uffe3', &['\xaf']),
+        ('\uffe4', &['\xa6']),
+        ('\uffe5', &['\xa5']),
+        ('\uffe6', &['\u20a9']),
+        ('\uffe8', &['\u2502']),
+        ('\uffe9', &['\u2190']),
+        ('\uffea', &['\u2191']),
+        ('\uffeb', &['\u2192']),
+        ('\uffec', &['\u2193']),
+        ('\uffed', &['\u25a0']),
+        ('\uffee', &['\u25cb']),
+    ];
+
+    for &(a, bs) in answers.iter() {
+        assert_array_eq(bs, compat_decomp(a));
+    }
+}
+
+#[test]
+fn test_compat_decomp_nonbmp() {
+    let answers = [
+        // borrowed from std::unicode
+        ('\U0001d400', &['\x41']), ('\U0001d401', &['\x42']),
+        ('\U0001d402', &['\x43']), ('\U0001d403', &['\x44']),
+        ('\U0001d404', &['\x45']), ('\U0001d405', &['\x46']),
+        ('\U0001d406', &['\x47']), ('\U0001d407', &['\x48']),
+
+        ('\U0001f241', &['\u3014', '\u4e09', '\u3015']),
+        ('\U0001f242', &['\u3014', '\u4e8c', '\u3015']),
+        ('\U0001f243', &['\u3014', '\u5b89', '\u3015']),
+        ('\U0001f244', &['\u3014', '\u70b9', '\u3015']),
+        ('\U0001f245', &['\u3014', '\u6253', '\u3015']),
+        ('\U0001f246', &['\u3014', '\u76d7', '\u3015']),
+        ('\U0001f247', &['\u3014', '\u52dd', '\u3015']),
+        ('\U0001f248', &['\u3014', '\u6557', '\u3015']),
+        ('\U0001f250', &['\u5f97']),
+        ('\U0001f251', &['\u53ef']),
+    ];
+
+    for &(a, bs) in answers.iter() {
+        assert_array_eq(bs, compat_decomp(a));
+    }
+}
+
+#[test]
+fn test_compat_decomp_none() {
+    let vals = [
+        // some arbitrary examples...
+        '\x00', '\x01', '\xA1', '\xA1',
+        '\xA9', '\xAB', '\xB0', '\xB6',
+        '\u0903', '\u0B85', '\uFE73', '\uFFE7',
+        '\U0002F800', '\U0002F801', '\U0002F802', '\U0002F803',
+    ];
+
+    for &val in vals.iter() {
+        assert_eq!(None, compat_decomp(val));
     }
 }
