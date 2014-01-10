@@ -564,6 +564,7 @@ fn bsearch_range<T>(table: &[T], f: |&T, &T| -> Ordering) -> uint {
 
     emit_range_table(rf, "combining_class", data["combines"], "u8")
     emit_list_table(rf, "compat_decomp", data["compat_decomp"])
+    emit_list_table(rf, "canon_decomp", data["canon_decomp"])
 
     derived = fetch_unicode("DerivedCoreProperties", unicode_version)
     derived = load_properties(derived, [

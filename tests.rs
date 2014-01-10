@@ -1,7 +1,7 @@
 extern mod extra;
 
 use unicode::{general_category, combining_class, uppercase, lowercase, alphabetic};
-use unicode::compat_decomp;
+use unicode::{compat_decomp, canon_decomp};
 use extra::test::BenchHarness;
 
 mod unicode;
@@ -282,5 +282,73 @@ fn test_compat_decomp_none() {
 
     for &val in vals.iter() {
         assert_eq!(None, compat_decomp(val));
+    }
+}
+#[test]
+fn test_canon_decomp_bmp() {
+    let answers = [
+        // borrowed from std::unicode
+        ('\xc0', &['\x41', '\u0300']), ('\xc1', &['\x41', '\u0301']),
+        ('\xc2', &['\x41', '\u0302']), ('\xc3', &['\x41', '\u0303']),
+        ('\xc4', &['\x41', '\u0308']), ('\xc5', &['\x41', '\u030a']),
+        ('\xc7', &['\x43', '\u0327']), ('\xc8', &['\x45', '\u0300']),
+        ('\xc9', &['\x45', '\u0301']), ('\xca', &['\x45', '\u0302']),
+        ('\xcb', &['\x45', '\u0308']), ('\xcc', &['\x49', '\u0300']),
+        ('\xcd', &['\x49', '\u0301']), ('\xce', &['\x49', '\u0302']),
+        ('\xcf', &['\x49', '\u0308']),
+
+        ('\ufb3e', &['\u05de', '\u05bc']), ('\ufb40', &['\u05e0', '\u05bc']),
+        ('\ufb41', &['\u05e1', '\u05bc']), ('\ufb43', &['\u05e3', '\u05bc']),
+        ('\ufb44', &['\u05e4', '\u05bc']), ('\ufb46', &['\u05e6', '\u05bc']),
+        ('\ufb47', &['\u05e7', '\u05bc']), ('\ufb48', &['\u05e8', '\u05bc']),
+        ('\ufb49', &['\u05e9', '\u05bc']), ('\ufb4a', &['\u05ea', '\u05bc']),
+        ('\ufb4b', &['\u05d5', '\u05b9']), ('\ufb4c', &['\u05d1', '\u05bf']),
+        ('\ufb4d', &['\u05db', '\u05bf']), ('\ufb4e', &['\u05e4', '\u05bf']),
+
+    ];
+
+    for &(a, bs) in answers.iter() {
+        assert_array_eq(bs, canon_decomp(a));
+    }
+}
+
+#[test]
+fn test_canon_decomp_nonbmp() {
+    let answers = [
+        // borrowed from std::unicode
+        ('\U0001109a', &['\U00011099', '\U000110ba']),
+        ('\U0001109c', &['\U0001109b', '\U000110ba']),
+        ('\U000110ab', &['\U000110a5', '\U000110ba']),
+        ('\U0001112e', &['\U00011131', '\U00011127']),
+        ('\U0001112f', &['\U00011132', '\U00011127']),
+        ('\U0001d15e', &['\U0001d157', '\U0001d165']),
+        ('\U0001d15f', &['\U0001d158', '\U0001d165']),
+        ('\U0001d160', &['\U0001d15f', '\U0001d16e']),
+        ('\U0001d161', &['\U0001d15f', '\U0001d16f']),
+
+        ('\U0002fa15', &['\u9ebb']), ('\U0002fa16', &['\u4d56']),
+        ('\U0002fa17', &['\u9ef9']), ('\U0002fa18', &['\u9efe']),
+        ('\U0002fa19', &['\u9f05']), ('\U0002fa1a', &['\u9f0f']),
+        ('\U0002fa1b', &['\u9f16']), ('\U0002fa1c', &['\u9f3b']),
+        ('\U0002fa1d', &['\U0002a600'])
+    ];
+
+    for &(a, bs) in answers.iter() {
+        assert_array_eq(bs, canon_decomp(a));
+    }
+}
+
+#[test]
+fn test_canon_decomp_none() {
+    let vals = [
+        // some arbitrary examples...
+        '\x00', '\x01', '\xA1', '\xA1',
+        '\xA9', '\xAB', '\xB0', '\xB6',
+        '\u0903', '\u0B85', '\uFE73', '\uFFE7',
+        '\U0001109b',
+    ];
+
+    for &val in vals.iter() {
+        assert_eq!(None, canon_decomp(val));
     }
 }
