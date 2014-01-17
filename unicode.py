@@ -568,7 +568,7 @@ fn bsearch_range<T>(table: &[T], f: |&T, &T| -> Ordering) -> uint {
 
     derived = fetch_unicode("DerivedCoreProperties", unicode_version)
     derived = load_properties(derived, [
-        # "XID_Start", "XID_Continue",
+        "XID_Start",  # "XID_Continue",
         "Alphabetic", "Lowercase", "Uppercase"
     ])
 
