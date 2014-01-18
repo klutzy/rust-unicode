@@ -1,7 +1,7 @@
 extern mod extra;
 
 use unicode::{general_category, combining_class, uppercase, lowercase, alphabetic};
-use unicode::{compat_decomp, canon_decomp, xid_start};
+use unicode::{compat_decomp, canon_decomp, xid_start, xid_continue};
 use extra::test::BenchHarness;
 
 mod unicode;
@@ -401,5 +401,53 @@ fn test_xid_start_false() {
 
     for &val in vals.iter() {
         assert!(!xid_start(val));
+    }
+}
+
+#[test]
+fn test_xid_continue_bmp() {
+    let vals = [
+        '\x30', '\x31', '\x39',
+        '\x41', '\x42', '\x5a',
+        '\x5f',
+        '\x61', '\x62', '\x7a',
+        '\xaa',
+        '\uffca', '\uffcb', '\uffcf',
+        '\uffd2', '\uffd3', '\uffd7',
+        '\uffda', '\uffdb', '\uffdc',
+    ];
+
+    for &val in vals.iter() {
+        assert!(xid_continue(val));
+    }
+}
+
+#[test]
+fn test_xid_continue_nonbmp() {
+    let vals = [
+        '\U00010000', '\U00010001', '\U0001000B',
+        '\U0001000D', '\U0001000E', '\U00010026',
+        '\U00010028', '\U00010029', '\U0001003A',
+        '\U0002F800', '\U0002F801', '\U0002FA1D',
+        '\U000E0100', '\U000E0101', '\U000E01EF',
+    ];
+
+    for &val in vals.iter() {
+        assert!(xid_continue(val));
+    }
+}
+
+#[test]
+fn test_xid_continue_false() {
+    let vals = [
+        '\x00', '\x01', '\x40', '\x5b',
+        '\x60', '\x7b', '\xa9', '\xab',
+        '\uffc9', '\uffd0', '\uffd1', '\uffd8',
+        '\uffd9', '\uffdd', '\uffff',
+        '\U0001000C', '\U00010027', '\U0001003B',
+    ];
+
+    for &val in vals.iter() {
+        assert!(!xid_continue(val), "{}", val as uint);
     }
 }
